@@ -5,33 +5,87 @@
 #define RX 50
 #define TX 51
 #define pinLED 13
-#include <SoftwareSerial.h>
- 
 #define NUMBER_OF_STEPS_PER_REV 512
 #include <Stepper.h>
-SoftwareSerial bluetooth(TX, RX);
+
+#include <SoftwareSerial.h>
+const int LIGHT_PIN = A0; // Pin connected to voltage divider output
+const float VCC = 4.98; // Measured voltage of Ardunio 5V line
+const float R_DIV = 4660.0; // Measured resistance of 3.3k resistor
+const float SERO = 14400.0;
 int one_rotation = 515;
 int full_motion = 3090;
 float current_state = 0;
+boolean wasDay;
+//-----------------ESP-----------------------
+#define DEBUG true
+String mySSID = "UPC-Jiri-Kara";       // WiFi SSID
+String myPWD = "W8hdyubpNssf"; // WiFi Password
+String myAPI = "G4YEFVCJUSCBSXJV";   // API Key
+String myHOST = "184.106.153.149";
+String myPORT = "80";
+String myFIELD = "field1";
+String myFIELD2 = "field2"; 
+String odesilanaHodnota = "1";
+String odesilanaHodnota2 = "2";
+//-------------------------------------------------
+
+SoftwareSerial bluetooth(TX, RX);
 
 void setup(){
+   Serial.begin(9600);
   bluetooth.begin(9600);
-  bluetooth.println("Arduino zapnuto, test Bluetooth..");
-  // nastavení pinu s LED diodou jako výstup
-  pinMode(pinLED, OUTPUT);
+  bluetooth.println("Arduino zapnuto, test Bluetooth.."); 
+  pinMode(LIGHT_PIN, INPUT);
+  pinMode(A,OUTPUT);
+  pinMode(B,OUTPUT);
+  pinMode(C,OUTPUT);
+  pinMode(D,OUTPUT);
+  Serial1.begin(115200);
+  espData("AT+RST", 1000, DEBUG);                      //Reset the ESP8266 module
+  espData("AT+CWMODE=1", 1000, DEBUG);                 //Set the ESP mode as station mode
+  espData("AT+CWJAP=\""+ mySSID +"\",\""+ myPWD +"\"", 1000, DEBUG);   //Connect to WiFi network
+  espData("AT+CIFSR", 1000, DEBUG);
+  //delay(1000);
+}
+void funkce1(){
   
-pinMode(A,OUTPUT);
-pinMode(B,OUTPUT);
-pinMode(C,OUTPUT);
-pinMode(D,OUTPUT);
-int rychlost=0.5;
+  String sendData = "GET /update?api_key="+ myAPI +"&"+ myFIELD +"="+float(current_state);
+  espData("AT+CIPMUX=0", 1000, DEBUG); 
+  espData("AT+CIPSTART=\"TCP\",\""+ myHOST +"\","+ myPORT, 1000, DEBUG);
+  //espData("AT+CIPSEND=0," +String(sendData.length()),1000,DEBUG); 
+  Serial1.println("AT+CIPSEND=51");
+  Serial1.find(">"); 
+  Serial1.println(sendData);
+  espData("AT+CIPCLOSE=0",1000,DEBUG);
+}
+String espData(String command, const int timeout, boolean debug){
+  Serial.print("AT Command ==> ");
+  Serial.print(command);
+  Serial.println("     ");
+  
+  String response = "";
+  Serial1.println(command);
+  long int time = millis();
+  while ( (time + timeout) > millis())
+  {
+    while (Serial1.available())
+    {
+      char c = Serial1.read();
+      response += c;
+    }
+  }
+
+    Serial.print(response);
+
+  return response;
 }
 
 void write(int a,int b,int c,int d){
-digitalWrite(A,a);
-digitalWrite(B,b);
-digitalWrite(C,c);
-digitalWrite(D,d);
+  digitalWrite(A,a);
+  digitalWrite(B,b);
+  digitalWrite(C,c);
+  digitalWrite(D,d);
 }
 
 void nahoru(int otocek){
@@ -78,17 +132,18 @@ void dolu(int otocek){
 
 void loop() {
   byte BluetoothData;
+ funkce1();
+  
   if (bluetooth.available() > 0) {
       BluetoothData = bluetooth.read();
-    
-     
+     bluetooth.println(BluetoothData);
     switch (BluetoothData) {
-      case '0': //zatemni
+      case '0': //0%
        nahoru(full_motion * current_state);
         current_state = 0;
         bluetooth.println(current_state);
         break;
-      case '1': //odtemni
+      case '1': //100%
        dolu(full_motion * (1 - current_state));
         current_state = 1;
         bluetooth.println(current_state);
@@ -132,9 +187,44 @@ void loop() {
           }
           current_state = 0.75;
           bluetooth.println(current_state);
-        break;     
+        break; 
+         case '5': // automatic
+      boolean ahoj = true;
+      boolean was = true;
+        while(ahoj){
+          funkce1();     
+          if (BluetoothData==55)ahoj=false;     
+          int lightADC = analogRead(LIGHT_PIN);       
+          if (lightADC < 0)continue;   
+          float lightV = lightADC * VCC / 1023.0;
+          float lightR = R_DIV * (VCC / lightV - 1.0);
+          Serial.println("Voltage: " + String(lightV) + " V");
+          Serial.println("Resistance: " + String(lightR) + " ohms");
+          boolean isDay = lightR <= SERO;
+          if(was){
+            wasDay=!isDay;
+            was = false;
+            continue;
+          }
+          if (isDay && !wasDay){
+            nahoru(full_motion * current_state);
+            bluetooth.println("vytahuju");
+            current_state = 0;
+            wasDay = isDay;
+            continue;
+          }          
+          if(!isDay && wasDay){
+            dolu(full_motion * (1 - current_state));
+             bluetooth.println("zatahuju");
+             current_state = 1;
+             wasDay = isDay;
+            continue;
+          }           
+          delay(15000); 
+          BluetoothData = bluetooth.read();            
+      }
+      break;
     }
   }
-  delay(100);
-  //tohle je testik
+  delay(100); 
 }
